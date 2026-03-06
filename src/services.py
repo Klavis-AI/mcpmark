@@ -17,64 +17,29 @@ deprecated and set to None for backward-compatibility.
 SERVICES = {
     "notion": {
         "config_schema": {
+            # Credentials are now sourced from the Klavis sandbox metadata.
+            # These env-var entries are kept as optional fallbacks for
+            # verification scripts that read EVAL_NOTION_API_KEY directly.
             "source_api_key": {
                 "env_var": "SOURCE_NOTION_API_KEY",
-                "required": True,
-                "description": "Notion API key for source hub with templates",
+                "required": False,
+                "description": "Notion API key for source hub (optional, sandbox provides it)",
             },
             "eval_api_key": {
                 "env_var": "EVAL_NOTION_API_KEY",
-                "required": True,
-                "description": "Notion API key for evaluation hub",
-            },
-            "source_parent_page_title": {
-                "env_var": "SOURCE_PARENT_PAGE_TITLE",
-                "default": "MCPMark Source Hub",
                 "required": False,
-                "description": "Title of the source hub page that contains all initial states",
-            },
-            "eval_parent_page_title": {
-                "env_var": "EVAL_PARENT_PAGE_TITLE",
-                "required": True,
-                "description": "Title of the parent page in evaluation workspace",
-            },
-            "playwright_headless": {
-                "env_var": "PLAYWRIGHT_HEADLESS",
-                "default": True,
-                "required": False,
-                "description": "Run browser in headless mode",
-                "transform": "bool",  # Will be handled by GenericConfigSchema
-            },
-            "playwright_browser": {
-                "env_var": "PLAYWRIGHT_BROWSER",
-                "default": "firefox",
-                "required": False,
-                "description": "Browser to use for Playwright",
-                "validator": "in:chromium,firefox,webkit",  # Simple validator syntax
+                "description": "Notion API key for evaluation hub (optional, sandbox provides it)",
             },
         },
         "components": {
             "task_manager": "src.mcp_services.notion.notion_task_manager.NotionTaskManager",
-            "state_manager": "src.mcp_services.notion.notion_state_manager.NotionStateManager",
+            "state_manager": "src.mcp_services.notion.notion_mcp_state_manager.NotionMCPStateManager",
             "login_helper": "src.mcp_services.notion.notion_login_helper.NotionLoginHelper",
         },
         "config_mapping": {
-            # Maps config schema keys to class constructor parameters
-            "state_manager": {
-                "source_notion_key": "source_api_key",
-                "eval_notion_key": "eval_api_key",
-                "headless": "playwright_headless",
-                "browser": "playwright_browser",
-                "source_parent_page_title": "source_parent_page_title",
-                "eval_parent_page_title": "eval_parent_page_title",
-            },
-            "login_helper": {
-                "headless": "playwright_headless",
-                "browser": "playwright_browser",
-            },
+            "state_manager": {},
+            "login_helper": {},
         },
-        # MCP server is now instantiated dynamically in MCPAgent; kept for backward
-        # compatibility but set to None to indicate deprecation.
         "mcp_server": None,
         "eval_config": None,
     },

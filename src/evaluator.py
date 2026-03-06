@@ -197,6 +197,13 @@ class MCPEvaluator:
             self.agent.mcp_url = (sandbox.acquired_sandbox or {}).get(
                 "server_urls", {}
             ).get(task.service)
+
+        # Provide sandbox-sourced Notion credentials to the state manager
+        if hasattr(self.state_manager, "set_sandbox_auth") and isinstance(sandbox, KlavisSandbox):
+            notion_auth = sandbox.get_notion_auth()
+            if notion_auth:
+                self.state_manager.set_sandbox_auth(notion_auth)
+
         # ------------------------------------------------------------------
         # Stage 1: Set up the initial state for the task
         # ------------------------------------------------------------------
