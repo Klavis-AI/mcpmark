@@ -30,6 +30,7 @@ class BaseTask:
     service: str
     category_id: str  # From meta.json if available, otherwise directory name
     task_id: str  # From meta.json if available, otherwise directory name
+    sandbox: Optional[Any] = None  # KlavisSandbox instance, set after acquire
 
     @property
     def name(self) -> str:

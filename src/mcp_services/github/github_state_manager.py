@@ -6,6 +6,7 @@ This module handles GitHub repository state management for consistent task evalu
 Manages test repositories, branches, and cleanup after evaluation.
 """
 
+import os
 import requests
 from typing import Optional, List, Union
 from pathlib import Path
@@ -435,6 +436,19 @@ class GitHubStateManager(BaseStateManager):
     # Public – create initial state using local template import
     # ---------------------------------------------------------------------
 
+    def _get_github_project_owner(self, access_token: str) -> str:
+        """Return the login (username) of the authenticated GitHub user."""
+        resp = requests.get(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/vnd.github+json",
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json()["login"]
+
     def _create_initial_state(self, task: "BaseTask") -> Optional[InitialStateInfo]:
         """
         Set up GitHub environment for a specific task.
@@ -446,6 +460,12 @@ class GitHubStateManager(BaseStateManager):
         """
         try:
             logger.info(f"| Setting up GitHub state for task: {task.name}")
+            sandbox = task.sandbox
+            sandbox_info = sandbox.get_sandbox_info()
+            access_token = sandbox_info.get("auth_data", {}).get("access_token")
+            os.environ["GITHUB_TOKENS"] = access_token
+            user_name = self._get_github_project_owner(access_token)
+            os.environ["GITHUB_EVAL_ORG"] = user_name
 
             template_name = self.select_initial_state_for_task(task.category_id)
             if template_name is None:

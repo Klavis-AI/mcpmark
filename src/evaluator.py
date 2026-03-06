@@ -12,6 +12,7 @@ from src.model_config import ModelConfig
 from src.results_reporter import EvaluationReport, ResultsReporter, TaskResult
 from src.errors import is_retryable_error
 from src.agents import AGENT_REGISTRY
+from src.klavis_util import KlavisSandbox
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -185,6 +186,10 @@ class MCPEvaluator:
         # Track overall task start time
         task_start_time = time.time()
 
+        sandbox = KlavisSandbox()
+        sandbox.acquire(task.service)
+        task.sandbox = sandbox
+
         # ------------------------------------------------------------------
         # Stage 1: Set up the initial state for the task
         # ------------------------------------------------------------------
@@ -280,7 +285,8 @@ class MCPEvaluator:
             "┌─ Stage 4: Cleanup ───────────────────────────────────────────────────"
         )
         cleanup_start_time = time.time()
-        self.state_manager.clean_up(task)
+        logger.info(f"| Starting cleanup for task: {task.name}")
+        sandbox.release()
         cleanup_time = time.time() - cleanup_start_time
         logger.info(f"└─ Completed in {self._format_duration(cleanup_time)}\n")
 
