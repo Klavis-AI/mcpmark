@@ -101,20 +101,6 @@ SERVICES = {
     },
     "filesystem": {
         "config_schema": {
-            "test_root": {
-                "env_var": "FILESYSTEM_TEST_ROOT",
-                "default": None,
-                "required": False,
-                "description": "Root directory for filesystem tests",
-                "transform": "path",  # Convert to Path object
-            },
-            "cleanup_on_exit": {
-                "env_var": "FILESYSTEM_CLEANUP",
-                "default": True,
-                "required": False,
-                "description": "Clean up test directories after tasks",
-                "transform": "bool",
-            },
         },
         "components": {
             "task_manager": "src.mcp_services.filesystem.filesystem_task_manager.FilesystemTaskManager",
@@ -123,8 +109,6 @@ SERVICES = {
         },
         "config_mapping": {
             "state_manager": {
-                "test_root": "test_root",
-                "cleanup_on_exit": "cleanup_on_exit",
             }
         },
         "mcp_server": None,

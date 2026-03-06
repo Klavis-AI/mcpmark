@@ -12,7 +12,7 @@ from src.model_config import ModelConfig
 from src.results_reporter import EvaluationReport, ResultsReporter, TaskResult
 from src.errors import is_retryable_error
 from src.agents import AGENT_REGISTRY
-from src.klavis_util import KlavisSandbox
+from src.klavis_util import KlavisLocalSandbox, KlavisSandbox
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -187,7 +187,16 @@ class MCPEvaluator:
         task_start_time = time.time()
 
         task.sandbox = sandbox
-        self.agent.mcp_url = sandbox.acquired_sandbox.get("server_urls", {}).get(task.service)
+        # Set MCP URL: local sandboxes expose per-server URLs; regular sandboxes
+        # store them under "server_urls".
+        if isinstance(sandbox, KlavisLocalSandbox):
+            self.agent.mcp_url = (sandbox.acquired_sandbox or {}).get(
+                "server_urls", {}
+            ).get(task.service)
+        else:
+            self.agent.mcp_url = (sandbox.acquired_sandbox or {}).get(
+                "server_urls", {}
+            ).get(task.service)
         # ------------------------------------------------------------------
         # Stage 1: Set up the initial state for the task
         # ------------------------------------------------------------------
@@ -257,6 +266,19 @@ class MCPEvaluator:
         self.state_manager.set_verification_environment(str(messages_path))
         logger.info(f"└─ Completed in {self._format_duration(agent_execution_time)}\n")
 
+        # For local-sandbox services (e.g. filesystem), dump the sandbox
+        # state back to a local directory so verification scripts can inspect it.
+        if isinstance(sandbox, KlavisLocalSandbox) and hasattr(
+            self.state_manager, "dump_sandbox_state"
+        ):
+            logger.info(
+                "┌─ Stage 2b: Dump sandbox state ──────────────────────────────────────"
+            )
+            dump_ok = self.state_manager.dump_sandbox_state(sandbox, task)
+            if not dump_ok:
+                logger.warning("| Sandbox dump failed; verification may be affected")
+            logger.info("└─ Done\n")
+
         # ------------------------------------------------------------------
         # Stage 3: Verify
         # ------------------------------------------------------------------
@@ -272,7 +294,7 @@ class MCPEvaluator:
 
             os.environ.pop("MCP_MESSAGES", None)
             os.environ.pop("MCP_GITHUB_TOKEN", None)
-            
+
         verify_time = time.time() - verify_start_time
         logger.info(f"└─ Completed in {self._format_duration(verify_time)}\n")
 
@@ -284,7 +306,7 @@ class MCPEvaluator:
         )
         cleanup_start_time = time.time()
         logger.info(f"| Starting cleanup for task: {task.name}")
-        sandbox.release()
+        self.state_manager.clean_up(task)
         cleanup_time = time.time() - cleanup_start_time
         logger.info(f"└─ Completed in {self._format_duration(cleanup_time)}\n")
 
@@ -341,12 +363,25 @@ class MCPEvaluator:
             # Execute new task
             # --------------------------------------------------------------
             task_start = time.time()
-            sandbox = KlavisSandbox()
-            try:
-                sandbox.acquire(task.service)
-                task_result = self._run_single_task(task, sandbox)
-            finally:
-                sandbox.release()
+
+            # Services that run inside a Local Sandbox VM (interconnected
+            # MCP servers that need filesystem / local machine access).
+            LOCAL_SANDBOX_SERVICES = {"filesystem"}
+
+            if task.service in LOCAL_SANDBOX_SERVICES:
+                sandbox = KlavisLocalSandbox()
+                try:
+                    sandbox.acquire([task.service])
+                    task_result = self._run_single_task(task, sandbox)
+                finally:
+                    sandbox.release()
+            else:
+                sandbox = KlavisSandbox()
+                try:
+                    sandbox.acquire(task.service)
+                    task_result = self._run_single_task(task, sandbox)
+                finally:
+                    sandbox.release()
             task_end = time.time()
 
             results.append(task_result)
