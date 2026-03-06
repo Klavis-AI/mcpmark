@@ -8,13 +8,12 @@ Manages test repositories, branches, and cleanup after evaluation.
 
 import os
 import requests
-from typing import Optional, List, Union
+from typing import Optional
 from pathlib import Path
 
 from src.base.state_manager import BaseStateManager, InitialStateInfo
 from src.base.task_manager import BaseTask
 from src.logger import get_logger
-from src.mcp_services.github.token_pool import GitHubTokenPool
 
 logger = get_logger(__name__)
 
@@ -26,10 +25,6 @@ class GitHubStateManager(BaseStateManager):
 
     def __init__(
         self,
-        github_token: Union[str, List[str]],
-        # Name of the evaluation organisation / user where temporary test repositories are created
-        eval_org: str = "mcpmark-eval",
-        # Local directory that stores *exported* repository templates (produced by repo_exporter.py)
         templates_root: str = "./github_state",
     ):
         """
@@ -44,21 +39,8 @@ class GitHubStateManager(BaseStateManager):
         # Track repos created via template import so we can delete them afterwards
         self._repos_to_cleanup: list[tuple[str, str]] = []  # (owner, repo_name)
 
-        # Initialize token pool
-        if isinstance(github_token, str):
-            # Single token - create pool with one token
-            self.token_pool = GitHubTokenPool([github_token])
-            self.github_token = github_token  # Keep for backward compatibility
-        else:
-            # Multiple tokens - use token pool
-            self.token_pool = GitHubTokenPool(github_token)
-            self.github_token = (
-                self.token_pool.get_current_token()
-            )  # For backward compatibility
-
-        # Store evaluation context (consistent naming)
-        self.eval_org = eval_org  # evaluation organisation / user
-
+        self.github_token: str = ""  # Backward compatibility attribute for single token usage
+        self.eval_org: str = ""
         # Local path that contains exported repository templates
         self.templates_root = Path(templates_root).expanduser().resolve()
 
@@ -72,40 +54,6 @@ class GitHubStateManager(BaseStateManager):
                 "User-Agent": "MCPMark/1.0",
             }
         )
-
-        # Validate GitHub configuration during initialization
-        try:
-            # Set initial token for validation
-            self._update_session_token()
-
-            response = self.session.get("https://api.github.com/user")
-            if response.status_code != 200:
-                raise ValueError(
-                    f"Invalid GitHub token: {response.status_code} {response.text}"
-                )
-
-            user_info = response.json()
-            logger.info(f"GitHub authenticated as: {user_info['login']}")
-            logger.info(f"Using token pool with {self.token_pool.pool_size} token(s)")
-
-            # Check if evaluation organisation exists (optional)
-            if self.eval_org:
-                org_response = self.session.get(
-                    f"https://api.github.com/orgs/{self.eval_org}"
-                )
-                if org_response.status_code == 200:
-                    logger.info(f"Using evaluation organisation: {self.eval_org}")
-                else:
-                    logger.warning(
-                        f"Evaluation organisation {self.eval_org} not accessible, using user account"
-                    )
-                    # Fall back to user account
-                    self.eval_org = user_info["login"]
-
-            logger.info("GitHub state manager initialized successfully")
-
-        except Exception as e:
-            raise RuntimeError(f"GitHub initialization failed: {e}")
 
         # Initial state mapping - categories to initial state repositories
         self.initial_state_mapping = {
@@ -238,8 +186,6 @@ class GitHubStateManager(BaseStateManager):
         auth_user = self._get_authenticated_user()
         create_url = (
             "https://api.github.com/user/repos"
-            if owner == auth_user
-            else f"https://api.github.com/orgs/{owner}/repos"
         )
 
         resp = self._request_with_retry("POST", create_url, json=create_payload)
@@ -462,10 +408,15 @@ class GitHubStateManager(BaseStateManager):
             logger.info(f"| Setting up GitHub state for task: {task.name}")
             sandbox = task.sandbox
             sandbox_info = sandbox.get_sandbox_info()
+
             access_token = sandbox_info.get("auth_data", {}).get("access_token")
-            os.environ["GITHUB_TOKENS"] = access_token
+            os.environ["MCP_GITHUB_TOKEN"] = access_token
+            self.github_token = access_token  # Update instance variable for API calls
+            self.session.headers.update({"Authorization": f"Bearer {self.github_token}"})
+            
             user_name = self._get_github_project_owner(access_token)
             os.environ["GITHUB_EVAL_ORG"] = user_name
+            self.eval_org = user_name  # Update instance variable for template imports
 
             template_name = self.select_initial_state_for_task(task.category_id)
             if template_name is None:
@@ -618,24 +569,6 @@ class GitHubStateManager(BaseStateManager):
         return None
 
     # ---------------------------------------------------------------------
-    # Token management helpers
-    # ---------------------------------------------------------------------
-    def _update_session_token(self):
-        """Update the session Authorization header with the current token."""
-        current_token = self.token_pool.get_current_token()
-        self.session.headers.update({"Authorization": f"Bearer {current_token}"})
-        # Update backward compatibility attribute
-        self.github_token = current_token
-
-    def _rotate_token(self):
-        """Rotate to the next token in the pool and update session."""
-        next_token = self.token_pool.get_next_token()
-        self.session.headers.update({"Authorization": f"Bearer {next_token}"})
-        # Update backward compatibility attribute
-        self.github_token = next_token
-        logger.debug(f"| Rotated to next token in pool")
-
-    # ---------------------------------------------------------------------
     # Generic request helper with rate-limit (403) retry handling
     # ---------------------------------------------------------------------
     def _request_with_retry(
@@ -657,36 +590,19 @@ class GitHubStateManager(BaseStateManager):
         import time  # local import to avoid adding global dependency
 
         attempt = 0
-        tokens_tried = 0
 
         while True:
-            # Ensure we have the current token set
-            self._update_session_token()
-
             resp = self.session.request(method, url, **kwargs)
             # Successful or non-rate-limited response – return immediately
             if resp.status_code != 403:
                 return resp
 
             # 403 – very likely rate-limited
-            # First, try rotating tokens if we have multiple
-            if (
-                self.token_pool.pool_size > 1
-                and tokens_tried < self.token_pool.pool_size
-            ):
-                logger.warning(
-                    "| GitHub API rate limit encountered. Rotating to next token (tried %d/%d tokens)",
-                    tokens_tried + 1,
-                    self.token_pool.pool_size,
-                )
-                self._rotate_token()
-                tokens_tried += 1
-                continue
 
             # All tokens exhausted or single token, resort to sleep/retry
             if attempt >= max_retries:
                 raise RuntimeError(
-                    f"GitHub API rate limited after {attempt + 1} attempts with {self.token_pool.pool_size} token(s): {resp.status_code} {resp.text}"
+                    f"GitHub API rate limited after {attempt + 1} attempts"
                 )
 
             logger.warning(
@@ -697,7 +613,6 @@ class GitHubStateManager(BaseStateManager):
             )
             time.sleep(sleep_seconds)
             attempt += 1
-            tokens_tried = 0  # Reset token counter for next attempt
 
     # =========================================================================
     # Initial State Selection and Repository Creation
@@ -770,27 +685,6 @@ class GitHubStateManager(BaseStateManager):
             service_config["github_token"] = self.github_token
 
         return service_config
-
-    def set_verification_environment(self, messages_path: str = None) -> None:
-        """
-        Set GitHub-specific environment variables for verification scripts.
-
-        This ensures verification scripts use the same token as the current
-        agent execution, maintaining consistency across the evaluation flow.
-
-        Args:
-            messages_path: Optional path to messages.json file for verification
-        """
-        import os
-
-        # Set common MCP_MESSAGES if provided
-        if messages_path:
-            os.environ["MCP_MESSAGES"] = str(messages_path)
-
-        # Set GitHub-specific token
-        current_token = self.token_pool.get_current_token()
-        os.environ["MCP_GITHUB_TOKEN"] = current_token
-        logger.info("| Set MCP_GITHUB_TOKEN for verification scripts")
 
     def _enable_github_actions(self, owner: str, repo_name: str):
         """Enable GitHub Actions for the repository using REST API."""

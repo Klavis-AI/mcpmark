@@ -80,20 +80,6 @@ SERVICES = {
     },
     "github": {
         "config_schema": {
-            "github_tokens": {
-                "env_var": "GITHUB_TOKENS",
-                "required": True,
-                "description": "GitHub personal access token(s) - comma-separated for round-robin",
-                "transform": "list",  # Will split by comma
-            },
-            # Evaluation organisation / user that hosts ephemeral test repositories
-            "eval_org": {
-                "env_var": "GITHUB_EVAL_ORG",
-                "default": "mcpleague-eval",
-                "required": False,
-                "description": "Evaluation organisation or user for creating temporary test repositories",
-            },
-            # (source_org removed – template repos now imported from local files)
         },
         "components": {
             "task_manager": "src.mcp_services.github.github_task_manager.GitHubTaskManager",

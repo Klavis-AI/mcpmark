@@ -179,17 +179,15 @@ class MCPEvaluator:
                 )
         return results
 
-    def _run_single_task(self, task) -> TaskResult:
+    def _run_single_task(self, task, sandbox) -> TaskResult:
         """
         Runs a single task, including setup, agent execution, verification, and cleanup.
         """
         # Track overall task start time
         task_start_time = time.time()
 
-        sandbox = KlavisSandbox()
-        sandbox.acquire(task.service)
         task.sandbox = sandbox
-
+        self.agent.mcp_url = sandbox.acquired_sandbox.get("server_urls", {}).get(task.service)
         # ------------------------------------------------------------------
         # Stage 1: Set up the initial state for the task
         # ------------------------------------------------------------------
@@ -343,7 +341,12 @@ class MCPEvaluator:
             # Execute new task
             # --------------------------------------------------------------
             task_start = time.time()
-            task_result = self._run_single_task(task)
+            sandbox = KlavisSandbox()
+            try:
+                sandbox.acquire(task.service)
+                task_result = self._run_single_task(task, sandbox)
+            finally:
+                sandbox.release()
             task_end = time.time()
 
             results.append(task_result)

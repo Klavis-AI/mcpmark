@@ -1,0 +1,6 @@
+# Example: OpenAI
+OPENAI_BASE_URL="https://api.openai.com/v1"
+OPENAI_API_KEY="OPENAI_API_KEY"
+
+# Klavis API key
+KLAVIS_API_KEY="KLAVIS_API_KEY"
