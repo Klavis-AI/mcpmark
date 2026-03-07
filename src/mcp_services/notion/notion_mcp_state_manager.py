@@ -80,7 +80,7 @@ class NotionMCPStateManager(BaseStateManager):
         source_hub_id = self._extract_page_id(source_page_url)
         eval_hub_id = self._extract_page_id(eval_page_url)
 
-        # Clean up leftover pages in the eval hub
+        # Clean up leftover pages in the eval hub (ideally not needed because Klavis Sandbox release will clean up but just in case)
         self._cleanup_eval_hub(eval_notion, eval_hub_id)
         # Clean up orphan "(n)" pages in the source hub
         self._cleanup_source_hub_orphans(notion, source_hub_id)
