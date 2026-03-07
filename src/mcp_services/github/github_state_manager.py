@@ -441,7 +441,7 @@ class GitHubStateManager(BaseStateManager):
             owner = self.eval_org if self.eval_org else self._get_authenticated_user()
 
             if "mcpmark-cicd" in template_name:
-                repo_url = self._import_template_repo(template_dir, owner, False)
+                repo_url = self._import_template_repo(template_dir, owner, True)
             else:
                 repo_url = self._import_template_repo(template_dir, owner, True)
 
