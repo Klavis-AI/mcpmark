@@ -75,6 +75,25 @@ class KlavisSandbox:
             logger.error(f"Failed to release sandbox '{server_name}/{sandbox_id}': {e}")
             return None
 
+    def get_notion_auth(self) -> Optional[Dict]:
+        """Extract Notion-specific auth credentials from sandbox details.
+
+        Returns a dict with integration keys, hub page URLs, and the OAuth
+        access token for the official Notion MCP server, or None on failure.
+        """
+        details = self.get_sandbox_info()
+        if not details:
+            return None
+        metadata = details.get("metadata") or {}
+        mcp_auth = metadata.get("mcp_auth_data") or {}
+        return {
+            "integration_key": metadata.get("mcpmark_notion_integration_key"),
+            "integration_key_eval": metadata.get("mcpmark_notion_integration_key_eval"),
+            "source_page_url": metadata.get("mcpmark_source_notion_page_url"),
+            "eval_page_url": metadata.get("mcpmark_eval_notion_page_url"),
+            "official_mcp_token": (mcp_auth.get("token") or {}).get("access_token"),
+        }
+
 
 class KlavisLocalSandbox:
     """Klavis Local Sandbox API client.

@@ -43,12 +43,16 @@ class MCPHttpServer:
         """Open Streamable HTTP transport and initialize MCP session."""
         self._stack = AsyncExitStack()
 
-        read_stream, write_stream, _ = await self._stack.enter_async_context(
-            streamablehttp_client(self.url, headers=self.headers)
-        )
+        try:
+            read_stream, write_stream, _ = await self._stack.enter_async_context(
+                streamablehttp_client(self.url, headers=self.headers)
+            )
 
-        self.session = await self._stack.enter_async_context(ClientSession(read_stream, write_stream))
-        await asyncio.wait_for(self.session.initialize(), timeout=self.timeout)
+            self.session = await self._stack.enter_async_context(ClientSession(read_stream, write_stream))
+            await asyncio.wait_for(self.session.initialize(), timeout=self.timeout)
+        except BaseException:
+            await self._stack.aclose()
+            raise
 
     async def stop(self):
         """Close the session/transport cleanly."""
