@@ -215,34 +215,46 @@ class NotionMCPStateManager(BaseStateManager):
 
             # 3. Move with retry + exponential backoff
             logger.info("| ○ Moving page to eval hub …")
-            max_attempts = 8
+            max_attempts = 12
             for attempt in range(1, max_attempts + 1):
-                move_result = await server.call_tool(
-                    "notion-move-pages",
-                    {
-                        "page_or_database_ids": [duplicated_id],
-                        "new_parent": {"page_id": eval_hub_id},
-                    },
-                )
-                move_data = json.loads(move_result["content"][0]["text"])
+                try:
+                    move_result = await server.call_tool(
+                        "notion-move-pages",
+                        {
+                            "page_or_database_ids": [duplicated_id],
+                            "new_parent": {"page_id": eval_hub_id},
+                        },
+                    )
+                    move_data = json.loads(move_result["content"][0]["text"])
 
-                if move_data.get("name") == "APIResponseError":
-                    body = json.loads(move_data.get("body", "{}"))
-                    msg = body.get("message", "")
-                    if "not a page or database" in msg.lower() or body.get("code") == "validation_error":
-                        if attempt < max_attempts:
-                            wait = 2 ** attempt
-                            logger.info(
-                                "| ○ Page not ready for move (attempt %d/%d). Waiting %ds …",
-                                attempt, max_attempts, wait,
-                            )
-                            await asyncio.sleep(wait)
-                            continue
-                    raise RuntimeError(f"Move failed: {msg}")
+                    if move_data.get("name") == "APIResponseError":
+                        body = json.loads(move_data.get("body", "{}"))
+                        msg = body.get("message", "")
+                        if "not a page or database" in msg.lower() or body.get("code") == "validation_error":
+                            if attempt < max_attempts:
+                                wait = min(2 ** attempt, 120)
+                                logger.info(
+                                    "| ○ Page not ready for move (attempt %d/%d). Waiting %ds …",
+                                    attempt, max_attempts, wait,
+                                )
+                                await asyncio.sleep(wait)
+                                continue
+                        raise RuntimeError(f"Move failed: {msg}")
 
-                if "result" in move_data and move_data["result"].startswith("Success"):
-                    logger.info("| ✓ Page moved to eval hub")
-                    break
+                    if "result" in move_data and move_data["result"].startswith("Success"):
+                        logger.info("| ✓ Page moved to eval hub")
+                        break
+                except RuntimeError:
+                    raise
+                except Exception as e:
+                    if attempt >= max_attempts:
+                        raise
+                    wait = min(attempt * 3, 60)
+                    logger.info(
+                        "| ○ Move failed (attempt %d/%d): %s. Waiting %ds …",
+                        attempt, max_attempts, e, wait,
+                    )
+                    await asyncio.sleep(wait)
             else:
                 raise RuntimeError(f"Move failed after {max_attempts} attempts")
 
@@ -296,24 +308,27 @@ class NotionMCPStateManager(BaseStateManager):
 
     @staticmethod
     def _wait_for_page_ready(
-        notion: Client, page_id: str, max_retries: int = 10, delay: int = 2
+        notion: Client, page_id: str, timeout: int = 120, poll_interval: int = 2
     ) -> bool:
         logger.info("| ○ Waiting for page %s to be accessible …", page_id)
-        for attempt in range(max_retries):
+        elapsed = 0
+        attempt = 0
+        while elapsed < timeout:
+            attempt += 1
             try:
                 result = notion.pages.retrieve(page_id=page_id)
                 if result and isinstance(result, dict) and "properties" in result:
                     logger.info(
-                        "| ✓ Page ready (attempt %d/%d)", attempt + 1, max_retries
+                        "| ✓ Page ready (attempt %d, %ds elapsed)", attempt, elapsed
                     )
                     return True
             except Exception as e:
                 logger.debug(
-                    "| ✗ Not ready (attempt %d/%d): %s", attempt + 1, max_retries, e
+                    "| ✗ Not ready (attempt %d, %ds elapsed): %s", attempt, elapsed, e
                 )
-            if attempt < max_retries - 1:
-                time.sleep(delay)
-        logger.error("| ✗ Page not ready after %d attempts", max_retries)
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+        logger.error("| ✗ Page not ready after %ds", timeout)
         return False
 
     @staticmethod
