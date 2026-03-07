@@ -68,6 +68,7 @@ class KlavisSandbox:
         headers = {"Authorization": f"Bearer {self.api_key}"}
         try:
             resp = httpx.delete(url, headers=headers, timeout=60)
+            self.acquired_sandbox = None
             resp.raise_for_status()
             return resp.json()
         except Exception as e:

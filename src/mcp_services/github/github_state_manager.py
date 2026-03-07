@@ -485,17 +485,13 @@ class GitHubStateManager(BaseStateManager):
     def clean_up(self, task=None, **kwargs) -> bool:
         """Delete repositories that were imported for tasks."""
         success = True
-        for owner, repo_name in self._repos_to_cleanup:
+        sandbox = task.sandbox if task else None
+        if sandbox:
             try:
-                self._delete_repository(owner, repo_name)
-                logger.info("| Deleted repository: %s/%s", owner, repo_name)
-            except Exception as err:
-                logger.error(
-                    "| Failed to delete repository %s/%s: %s", owner, repo_name, err
-                )
+                sandbox.release()
+            except Exception as e:
+                logger.error(f"| Failed to release sandbox: {e}")
                 success = False
-
-        self._repos_to_cleanup.clear()
         return success
 
     # =========================================================================
