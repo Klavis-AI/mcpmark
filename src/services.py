@@ -146,40 +146,7 @@ SERVICES = {
         "eval_config": None,
     },
     "postgres": {
-        "config_schema": {
-            "host": {
-                "env_var": "POSTGRES_HOST",
-                "default": "localhost",
-                "required": False,
-                "description": "PostgreSQL server host",
-            },
-            "port": {
-                "env_var": "POSTGRES_PORT",
-                "default": 5432,
-                "required": False,
-                "description": "PostgreSQL server port",
-                "transform": "int",
-                "validator": "port",  # Validates port range 1-65535
-            },
-            "database": {
-                "env_var": "POSTGRES_DATABASE",
-                "default": "postgres",
-                "required": False,
-                "description": "PostgreSQL database name",
-            },
-            "username": {
-                "env_var": "POSTGRES_USERNAME",
-                "default": "postgres",
-                "required": False,
-                "description": "PostgreSQL username",
-            },
-            "password": {
-                "env_var": "POSTGRES_PASSWORD",
-                "default": "password",
-                "required": False,
-                "description": "PostgreSQL password",
-            },
-        },
+        "config_schema": {},
         "components": {
             "task_manager": "src.mcp_services.postgres.postgres_task_manager.PostgresTaskManager",
             "state_manager": "src.mcp_services.postgres.postgres_state_manager.PostgresStateManager",

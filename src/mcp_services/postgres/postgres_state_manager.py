@@ -26,55 +26,23 @@ class PostgresStateManager(BaseStateManager):
 
     def __init__(
         self,
-        host: str = "localhost",
-        port: int = 5432,
-        database: str = "postgres",
-        username: str = "postgres",
-        password: str = None,
     ):
         """Initialize PostgreSQL state manager.
-
-        Args:
-            host: Database host
-            port: Database port
-            database: Main database name
-            username: Database username
-            password: Database password
-            template_db: Template database for initial states
         """
         super().__init__(service_name="postgres")
 
-        self.host = host
-        self.port = port
-        self.database = database
-        self.username = username
-        self.password = password
-
-        # Connection parameters
-        self.conn_params = {
-            "host": host,
-            "port": port,
-            "user": username,
-            "password": password,
-        }
+        self.database = "postgres"
+        self.host = ""
+        self.port = 0
+        self.username = ""
+        self.password = ""
+        self.conn_params = {}
 
         # Track created databases for cleanup
         self.created_databases: List[str] = []
 
         # Track current task database for agent configuration
         self._current_task_database: Optional[str] = None
-
-        # Validate connection on initialization
-        try:
-            self._test_connection()
-            logger.info("PostgreSQL state manager initialized successfully")
-        except Exception as e:
-            raise RuntimeError(f"PostgreSQL initialization failed: {e}")
-
-    def _test_connection(self):
-        """Test database connection."""
-        conn = psycopg2.connect(**self.conn_params, database="postgres")
-        conn.close()
 
     def _setup_database(self, db_name: str):
         """Setup all required databases by downloading and restoring from backup."""
@@ -138,6 +106,14 @@ class PostgresStateManager(BaseStateManager):
         try:
             # Generate unique database name
             db_name = "sandbox"
+            sandbox = task.sandbox
+            sandbox_info = sandbox.get_sandbox_info()
+
+            postgres_uri = sandbox_info.get("auth_data", {}).get("api_key")
+
+            if postgres_uri:
+                self._configure_from_uri(postgres_uri, db_name)
+
             self._setup_database(task.category_id)
             # Create database from template if exists, otherwise empty
             if self._database_exists(task.category_id):
@@ -256,7 +232,6 @@ class PostgresStateManager(BaseStateManager):
                     FROM pg_stat_activity
                     WHERE datname = %s
                       AND pid <> pg_backend_pid()
-                      AND NOT (SELECT rolsuper FROM pg_roles WHERE rolname = usename)
                 """),
                     (template_db,),
                 )
@@ -439,6 +414,20 @@ class PostgresStateManager(BaseStateManager):
         from datetime import datetime
 
         return datetime.now().strftime("%Y%m%d%H%M%S")
+
+    def _configure_from_uri(self, postgres_uri: str, db_name: str):
+        """Parse postgres_uri and configure connection params and environment variables."""
+        parsed = psycopg2.extensions.parse_dsn(postgres_uri)
+        self.host = parsed.get("host", "localhost")
+        self.port = int(parsed.get("port", 5432))
+        self.username = parsed.get("user", "postgres")
+        self.password = parsed.get("password")
+        self.conn_params = {k: v for k, v in parsed.items() if k != "dbname"}
+        os.environ["POSTGRES_HOST"] = self.host
+        os.environ["POSTGRES_PORT"] = str(self.port)
+        os.environ["POSTGRES_DATABASE"] = parsed.get("dbname", db_name)
+        os.environ["POSTGRES_USERNAME"] = self.username
+        os.environ["POSTGRES_PASSWORD"] = self.password or ""
 
     def get_service_config_for_agent(self) -> dict:
         """Get configuration for agent execution."""
