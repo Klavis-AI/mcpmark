@@ -49,71 +49,19 @@ cd mcpmark
 ```
 
 ### 2) Set environment variables (create `.mcp_env` at repo root)
-Only set what you need. Add service credentials when running tasks for that service.
+Add KLAVIS_API_KEY and model API key in the `.mcp_env`.
 
-```env
-# Example: OpenAI
-OPENAI_BASE_URL="https://api.openai.com/v1"
-OPENAI_API_KEY="sk-..."
-
-# Optional: Notion (only for Notion tasks)
-SOURCE_NOTION_API_KEY="your-source-notion-api-key"
-EVAL_NOTION_API_KEY="your-eval-notion-api-key"
-EVAL_PARENT_PAGE_TITLE="MCPMark Eval Hub"
-PLAYWRIGHT_BROWSER="chromium"   # chromium | firefox
-PLAYWRIGHT_HEADLESS="True"
-
-# Optional: GitHub (only for GitHub tasks)
-GITHUB_TOKENS="token1,token2"   # token pooling for rate limits
-GITHUB_EVAL_ORG="your-eval-org"
-
-# Optional: Postgres (only for Postgres tasks)
-POSTGRES_HOST="localhost"
-POSTGRES_PORT="5432"
-POSTGRES_USERNAME="postgres"
-POSTGRES_PASSWORD="password"
+```bash
+cp .mcp_env_example .mcp_env
 ```
 
 See `docs/introduction.md` and the service guides below for more details.
 
 ### 3) Install and run a minimal example
 
-Local (Recommended)
 ```bash
 pip install -e .
-# If you'll use browser-based tasks, install Playwright browsers first
-playwright install
 ```
-
-MCPMark defaults to the built-in orchestration agent (`MCPMarkAgent`). To experiment with the ReAct-style agent, pass `--agent react` to `pipeline.py` (other settings stay the same).
-
-Docker
-```bash
-./build-docker.sh
-```
-
-Run a filesystem task (no external accounts required):
-```bash
-python -m pipeline \
-  --mcp filesystem \
-  --k 1 \ # run once to quick start
-  --models gpt-5  \ # or any model you configured
-  --tasks file_property/size_classification
-# Add --task-suite easy to run the lightweight dataset (where available)
-```
-
-Results are saved to `./results/{exp_name}/{model}__{mcp}/run-*/...` for the standard suite and `./results/{exp_name}/{model}__{mcp}-easy/run-*/...` when you run `--task-suite easy` (e.g., `./results/test-run/gpt-5__filesystem/run-1/...` or `./results/test-run/gpt-5__github-easy/run-1/...`).
-
----
-
-## Run your evaluations
-
-### Task suites (standard vs easy)
-
-- Each MCP service now stores tasks under `tasks/<mcp>/<task_suite>/<category>/<task>/`.
-- `standard` (default) covers the full benchmark (127 tasks today).
-- `easy` hosts 10 lightweight tasks per MCP, ideal for smoke tests and CI (GitHub’s are already available under `tasks/github/easy`).
-- Switch suites with `--task-suite easy` (defaults to `--task-suite standard`).
 
 ### Single run (k=1)
 ```bash
