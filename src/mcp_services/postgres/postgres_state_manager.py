@@ -240,39 +240,44 @@ class PostgresStateManager(BaseStateManager):
         import time
         conn = psycopg2.connect(**self.conn_params, database="postgres")
         conn.autocommit = True
+        logger.info(f"Creating database '{new_db}' from template '{template_db}'")
         try:
             with conn.cursor() as cur:
+                # Block new connections to the template DB
+                cur.execute(
+                    sql.SQL("REVOKE CONNECT ON DATABASE {} FROM PUBLIC").format(
+                        sql.Identifier(template_db)
+                    )
+                )
+                # Terminate existing connections (only those we have permission to terminate)
                 cur.execute(
                     sql.SQL("""
                     SELECT pg_terminate_backend(pid)
                     FROM pg_stat_activity
-                    WHERE datname = %s AND pid <> pg_backend_pid()
+                    WHERE datname = %s
+                      AND pid <> pg_backend_pid()
+                      AND NOT (SELECT rolsuper FROM pg_roles WHERE rolname = usename)
                 """),
                     (template_db,),
                 )
-                # Retry CREATE DATABASE since terminated connections may not close immediately
-                for attempt in range(5):
-                    try:
-                        cur.execute(
-                            sql.SQL("CREATE DATABASE {} WITH TEMPLATE {}").format(
-                                sql.Identifier(new_db), sql.Identifier(template_db)
-                            )
-                        )
-                        break
-                    except psycopg2.errors.ObjectInUse:
-                        if attempt == 4:
-                            raise
-                        # Terminate again and wait for connections to close
-                        cur.execute(
-                            sql.SQL("""
-                            SELECT pg_terminate_backend(pid)
-                            FROM pg_stat_activity
-                            WHERE datname = %s AND pid <> pg_backend_pid()
-                        """),
-                            (template_db,),
-                        )
-                        time.sleep(0.5 * (attempt + 1))
+                # Wait for terminated connections to fully close
+                time.sleep(0.5)
+                cur.execute(
+                    sql.SQL("CREATE DATABASE {} WITH TEMPLATE {}").format(
+                        sql.Identifier(new_db), sql.Identifier(template_db)
+                    )
+                )
+        except Exception as e:
+            logger.error(f"_create_database_from_template error: {type(e).__name__}: {e}", exc_info=True)
+            raise
         finally:
+            # Re-enable connections to the template DB regardless of outcome
+            with conn.cursor() as cur:
+                cur.execute(
+                    sql.SQL("GRANT CONNECT ON DATABASE {} TO PUBLIC").format(
+                        sql.Identifier(template_db)
+                    )
+                )
             conn.close()
 
     def _create_empty_database(self, db_name: str):
