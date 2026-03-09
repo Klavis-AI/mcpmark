@@ -68,7 +68,6 @@ class PostgresStateManager(BaseStateManager):
         try:
             self._test_connection()
             logger.info("PostgreSQL state manager initialized successfully")
-            self._setup_database()
         except Exception as e:
             raise RuntimeError(f"PostgreSQL initialization failed: {e}")
 
@@ -76,131 +75,70 @@ class PostgresStateManager(BaseStateManager):
         """Test database connection."""
         conn = psycopg2.connect(**self.conn_params, database="postgres")
         conn.close()
-    
-    def _setup_database(self):
+
+    def _setup_database(self, db_name: str):
         """Setup all required databases by downloading and restoring from backup."""
-        databases = ['employees', 'chinook', 'dvdrental', 'sports', 'lego']
-        
-        for db_name in databases:
-            if not self._database_exists(db_name):
-                logger.info(f"Setting up {db_name} database...")
-                
-                # Path to backup file
-                backup_dir = Path(__file__).parent.parent.parent.parent / "postgres_state"
-                backup_file = backup_dir / f"{db_name}.backup"
-                
-                # Download backup if not exists
-                if not backup_file.exists():
-                    backup_dir.mkdir(parents=True, exist_ok=True)
-                    logger.info(f"Downloading {db_name} backup...")
-                    try:
-                        import urllib.request
-                        urllib.request.urlretrieve(
-                            f'https://storage.mcpmark.ai/postgres/{db_name}.backup',
-                            str(backup_file)
-                        )
-                        logger.info(f"{db_name} backup downloaded")
-                    except Exception as e:
-                        logger.warning(f"Failed to download {db_name} backup: {e}")
-                        continue
-                
-                # Create database
+
+        if not self._database_exists(db_name):
+            logger.info(f"Setting up {db_name} database...")
+
+            # Path to backup file
+            backup_dir = Path(__file__).parent.parent.parent.parent / "postgres_state"
+            backup_file = backup_dir / f"{db_name}.backup"
+
+            # Download backup if not exists
+            if not backup_file.exists():
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                logger.info(f"Downloading {db_name} backup...")
                 try:
-                    self._create_empty_database(db_name)
-                    logger.info(f"Created {db_name} database")
-                except Exception as e:
-                    logger.warning(f"Failed to create {db_name} database: {e}")
-                    continue
-                
-                # Restore from backup
-                env = os.environ.copy()
-                env['PGPASSWORD'] = self.password
-                
-                try:
-                    result = subprocess.run([
-                        'pg_restore',
-                        '-h', str(self.host),
-                        '-p', str(self.port),
-                        '-U', self.username,
-                        '-d', db_name,
-                        '-v',
+                    import urllib.request
+                    urllib.request.urlretrieve(
+                        f'https://storage.mcpmark.ai/postgres/{db_name}.backup',
                         str(backup_file)
-                    ], env=env, capture_output=True, text=True)
-                    
-                    if result.returncode != 0:
-                        logger.warning(f"pg_restore had errors for {db_name}: {result.stderr}")
-                    else:
-                        logger.info(f"{db_name} database restored successfully")
+                    )
+                    logger.info(f"{db_name} backup downloaded")
                 except Exception as e:
-                    logger.warning(f"Failed to restore {db_name} database: {e}")
-            else:
-                logger.debug(f"{db_name} database already exists")
+                    logger.warning(f"Failed to download {db_name} backup: {e}")
+                    return
 
-    def _setup_database(self):
-        """Setup all required databases by downloading and restoring from backup."""
-        databases = ['employees', 'chinook', 'dvdrental', 'sports', 'lego']
+            # Create database
+            try:
+                self._create_empty_database(db_name)
+                logger.info(f"Created {db_name} database")
+            except Exception as e:
+                logger.warning(f"Failed to create {db_name} database: {e}")
+                return
 
-        for db_name in databases:
-            if not self._database_exists(db_name):
-                logger.info(f"Setting up {db_name} database...")
+            # Restore from backup
+            env = os.environ.copy()
+            env['PGPASSWORD'] = self.password
 
-                # Path to backup file
-                backup_dir = Path(__file__).parent.parent.parent.parent / "postgres_state"
-                backup_file = backup_dir / f"{db_name}.backup"
+            try:
+                result = subprocess.run([
+                    'pg_restore',
+                    '-h', str(self.host),
+                    '-p', str(self.port),
+                    '-U', self.username,
+                    '-d', db_name,
+                    '-v',
+                    str(backup_file)
+                ], env=env, capture_output=True, text=True)
 
-                # Download backup if not exists
-                if not backup_file.exists():
-                    backup_dir.mkdir(parents=True, exist_ok=True)
-                    logger.info(f"Downloading {db_name} backup...")
-                    try:
-                        import urllib.request
-                        urllib.request.urlretrieve(
-                            f'https://storage.mcpmark.ai/postgres/{db_name}.backup',
-                            str(backup_file)
-                        )
-                        logger.info(f"{db_name} backup downloaded")
-                    except Exception as e:
-                        logger.warning(f"Failed to download {db_name} backup: {e}")
-                        continue
-
-                # Create database
-                try:
-                    self._create_empty_database(db_name)
-                    logger.info(f"Created {db_name} database")
-                except Exception as e:
-                    logger.warning(f"Failed to create {db_name} database: {e}")
-                    continue
-
-                # Restore from backup
-                env = os.environ.copy()
-                env['PGPASSWORD'] = self.password
-
-                try:
-                    result = subprocess.run([
-                        'pg_restore',
-                        '-h', str(self.host),
-                        '-p', str(self.port),
-                        '-U', self.username,
-                        '-d', db_name,
-                        '-v',
-                        str(backup_file)
-                    ], env=env, capture_output=True, text=True)
-
-                    if result.returncode != 0 and "ERROR" in result.stderr:
-                        logger.warning(f"pg_restore had errors for {db_name}: {result.stderr}")
-                    else:
-                        logger.info(f"{db_name} database restored successfully")
-                except Exception as e:
-                    logger.warning(f"Failed to restore {db_name} database: {e}")
-            else:
-                logger.debug(f"{db_name} database already exists")
+                if result.returncode != 0 and "ERROR" in result.stderr:
+                    logger.warning(f"pg_restore had errors for {db_name}: {result.stderr}")
+                else:
+                    logger.info(f"{db_name} database restored successfully")
+            except Exception as e:
+                logger.warning(f"Failed to restore {db_name} database: {e}")
+        else:
+            logger.debug(f"{db_name} database already exists")
 
     def _create_initial_state(self, task: BaseTask) -> Optional[InitialStateInfo]:
         """Create initial database state for a task."""
         try:
             # Generate unique database name
-            db_name = f"mcpmark_{task.category_id}_{task.task_id}_{self._get_timestamp()}"
-
+            db_name = "sandbox"
+            self._setup_database(task.category_id)
             # Create database from template if exists, otherwise empty
             if self._database_exists(task.category_id):
                 self._create_database_from_template(db_name, task.category_id)
@@ -275,6 +213,18 @@ class PostgresStateManager(BaseStateManager):
                 return False
         return False
 
+    def clean_up(self, task=None, **kwargs) -> bool:
+        """Delete repositories that were imported for tasks."""
+        success = True
+        sandbox = task.sandbox if task else None
+        if sandbox:
+            try:
+                sandbox.release()
+            except Exception as e:
+                logger.error(f"| Failed to release sandbox: {e}")
+                success = False
+        return success
+
     def _database_exists(self, db_name: str) -> bool:
         """Check if database exists."""
         conn = psycopg2.connect(**self.conn_params, database="postgres")
@@ -287,6 +237,7 @@ class PostgresStateManager(BaseStateManager):
 
     def _create_database_from_template(self, new_db: str, template_db: str):
         """Create database from template."""
+        import time
         conn = psycopg2.connect(**self.conn_params, database="postgres")
         conn.autocommit = True
         try:
@@ -299,11 +250,28 @@ class PostgresStateManager(BaseStateManager):
                 """),
                     (template_db,),
                 )
-                cur.execute(
-                    sql.SQL("CREATE DATABASE {} WITH TEMPLATE {}").format(
-                        sql.Identifier(new_db), sql.Identifier(template_db)
-                    )
-                )
+                # Retry CREATE DATABASE since terminated connections may not close immediately
+                for attempt in range(5):
+                    try:
+                        cur.execute(
+                            sql.SQL("CREATE DATABASE {} WITH TEMPLATE {}").format(
+                                sql.Identifier(new_db), sql.Identifier(template_db)
+                            )
+                        )
+                        break
+                    except psycopg2.errors.ObjectInUse:
+                        if attempt == 4:
+                            raise
+                        # Terminate again and wait for connections to close
+                        cur.execute(
+                            sql.SQL("""
+                            SELECT pg_terminate_backend(pid)
+                            FROM pg_stat_activity
+                            WHERE datname = %s AND pid <> pg_backend_pid()
+                        """),
+                            (template_db,),
+                        )
+                        time.sleep(0.5 * (attempt + 1))
         finally:
             conn.close()
 
