@@ -46,6 +46,9 @@ class PostgresStateManager(BaseStateManager):
 
     def _setup_database(self, db_name: str):
         """Setup all required databases by downloading and restoring from backup."""
+        databases = ['employees', 'chinook', 'dvdrental', 'sports', 'lego']
+        if db_name not in databases:
+            return
 
         if not self._database_exists(db_name):
             logger.info(f"Setting up {db_name} database...")
