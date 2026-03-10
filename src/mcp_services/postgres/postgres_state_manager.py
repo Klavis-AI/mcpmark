@@ -225,23 +225,30 @@ class PostgresStateManager(BaseStateManager):
                         sql.Identifier(template_db)
                     )
                 )
-                # Terminate existing connections (only those we have permission to terminate)
-                cur.execute(
-                    sql.SQL("""
-                    SELECT pg_terminate_backend(pid)
-                    FROM pg_stat_activity
-                    WHERE datname = %s
-                      AND pid <> pg_backend_pid()
-                """),
-                    (template_db,),
-                )
-                # Wait for terminated connections to fully close
-                time.sleep(0.5)
-                cur.execute(
-                    sql.SQL("CREATE DATABASE {} WITH TEMPLATE {}").format(
-                        sql.Identifier(new_db), sql.Identifier(template_db)
+                last_exc = None
+                for attempt in range(40):
+                    cur.execute(
+                        sql.SQL("""
+                        SELECT pg_terminate_backend(pid)
+                        FROM pg_stat_activity
+                        WHERE datname = %s AND pid <> pg_backend_pid()
+                    """),
+                        (template_db,),
                     )
-                )
+                    try:
+                        cur.execute(
+                            sql.SQL("CREATE DATABASE {} WITH TEMPLATE {}").format(
+                                sql.Identifier(new_db), sql.Identifier(template_db)
+                            )
+                        )
+                        last_exc = None
+                        break
+                    except psycopg2.errors.ObjectInUse as e:
+                        last_exc = e
+                        logger.warning(f"Template DB still in use (attempt {attempt + 1}/40), retrying in 5s...")
+                        time.sleep(5)
+                if last_exc:
+                    raise last_exc
         except Exception as e:
             logger.error(f"_create_database_from_template error: {type(e).__name__}: {e}", exc_info=True)
             raise
