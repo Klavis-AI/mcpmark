@@ -3,11 +3,12 @@ import os
 import tarfile
 from pathlib import Path
 from typing import Dict, List, Optional
-import logging
 import httpx
 
+from src.logger import get_logger
 
-logger = logging.getLogger(__name__)
+
+logger = get_logger(__name__)
 
 KLAVIS_API_BASE = "https://api.klavis.ai"
 
@@ -35,6 +36,7 @@ class KlavisSandbox:
             resp.raise_for_status()
             data = resp.json()
             self.acquired_sandbox = data
+            logger.info(f"Acquired sandbox: {data}")
             return data
         except Exception as e:
             logger.error(f"Failed to acquire sandbox for '{server_name}': {e}")
@@ -54,6 +56,7 @@ class KlavisSandbox:
             resp.raise_for_status()
             return resp.json()
         except Exception as e:
+            logger.error(f"get_sandbox_info response: status={resp.status_code}, body={resp.text}")
             logger.error(f"Failed to get sandbox info for '{server_name}/{sandbox_id}': {e}")
             return None
 
@@ -70,6 +73,7 @@ class KlavisSandbox:
             resp = httpx.delete(url, headers=headers, timeout=60)
             self.acquired_sandbox = None
             resp.raise_for_status()
+            logger.info(f"Released sandbox: {server_name}/{sandbox_id}")
             return resp.json()
         except Exception as e:
             logger.error(f"Failed to release sandbox '{server_name}/{sandbox_id}': {e}")

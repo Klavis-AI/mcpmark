@@ -111,7 +111,9 @@ class PostgresStateManager(BaseStateManager):
             db_name = "sandbox"
             sandbox = task.sandbox
             sandbox_info = sandbox.get_sandbox_info()
-
+            if not sandbox_info:
+                logger.error(f"Sandbox info is missing or empty. Sandbox: {sandbox.acquired_sandbox}")
+                raise ValueError("Sandbox info is missing or empty:")
             postgres_uri = sandbox_info.get("auth_data", {}).get("api_key")
 
             if postgres_uri:
@@ -219,7 +221,7 @@ class PostgresStateManager(BaseStateManager):
         import time
         conn = psycopg2.connect(**self.conn_params, database="postgres")
         conn.autocommit = True
-        logger.info(f"Creating database '{new_db}' from template '{template_db}'")
+        logger.info(f"| Creating database '{new_db}' from template '{template_db}'")
         try:
             with conn.cursor() as cur:
                 # Block new connections to the template DB

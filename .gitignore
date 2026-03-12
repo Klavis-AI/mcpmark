@@ -235,3 +235,7 @@ __marimo__/
 .mcpmark_backups/*
 test_environments/
 postgres_state
+
+# temporary files
+temp/*
+.tmp

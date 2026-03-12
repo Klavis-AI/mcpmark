@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.klavis_util import KlavisLocalSandbox, KlavisSandbox
 from src.logger import get_logger
 from src.results_reporter import TaskResult
 
@@ -30,7 +31,7 @@ class BaseTask:
     service: str
     category_id: str  # From meta.json if available, otherwise directory name
     task_id: str  # From meta.json if available, otherwise directory name
-    sandbox: Optional[Any] = None  # KlavisSandbox instance, set after acquire
+    sandbox: Optional[KlavisSandbox | KlavisLocalSandbox] = None  # KlavisSandbox instance, set after acquire
 
     @property
     def name(self) -> str:
