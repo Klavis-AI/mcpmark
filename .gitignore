@@ -238,4 +238,4 @@ postgres_state
 
 # temporary files
 temp/*
-.tmp
+*.tmp
