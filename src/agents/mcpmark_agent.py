@@ -147,9 +147,9 @@ class MCPMarkAgent(BaseMCPAgent):
             result["execution_time"] = execution_time
             return result
 
-        except Exception as e:
+        except BaseException as e:
             execution_time = time.time() - start_time
-            if isinstance(e, asyncio.TimeoutError):
+            if isinstance(e, (asyncio.TimeoutError, asyncio.CancelledError)):
                 error_msg = f"Execution timed out after {self.timeout} seconds"
                 logger.error(error_msg)
             else:
