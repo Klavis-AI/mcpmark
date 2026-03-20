@@ -197,6 +197,7 @@ class MCPEvaluator:
             self.agent.mcp_url = (sandbox.acquired_sandbox or {}).get(
                 "server_urls", {}
             ).get(task.service)
+        logger.info(f"| MCP URL for '{task.service}': {self.agent.mcp_url}")
 
         # Provide sandbox-sourced Notion credentials to the state manager
         if hasattr(self.state_manager, "set_sandbox_auth") and isinstance(sandbox, KlavisSandbox):
@@ -373,7 +374,7 @@ class MCPEvaluator:
 
             # Services that run inside a Local Sandbox VM (interconnected
             # MCP servers that need filesystem / local machine access).
-            LOCAL_SANDBOX_SERVICES = {"filesystem"}
+            LOCAL_SANDBOX_SERVICES = {"filesystem", "playwright"}
 
             if task.service in LOCAL_SANDBOX_SERVICES:
                 sandbox = KlavisLocalSandbox()
