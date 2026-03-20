@@ -132,7 +132,7 @@ class KlavisLocalSandbox:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        body = {"server_names": server_names}
+        body = {"server_names": server_names, "benchmark": "MCP_Mark", "ttl_seconds": 7200}
         try:
             resp = httpx.post(url, json=body, headers=headers, timeout=120)
             resp.raise_for_status()

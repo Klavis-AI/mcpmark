@@ -373,7 +373,7 @@ class MCPEvaluator:
 
             # Services that run inside a Local Sandbox VM (interconnected
             # MCP servers that need filesystem / local machine access).
-            LOCAL_SANDBOX_SERVICES = {"filesystem"}
+            LOCAL_SANDBOX_SERVICES = {"filesystem", "playwright"}
 
             if task.service in LOCAL_SANDBOX_SERVICES:
                 sandbox = KlavisLocalSandbox()
