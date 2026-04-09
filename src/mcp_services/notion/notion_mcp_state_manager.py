@@ -10,6 +10,7 @@ sandbox metadata instead of local environment variables.
 import asyncio
 import json
 import os
+import random
 import re
 import time
 from typing import Any, Dict, Optional, Set
@@ -180,6 +181,13 @@ class NotionMCPStateManager(BaseStateManager):
     # MCP duplication logic
     # ------------------------------------------------------------------
 
+    def _new_mcp_server(self, official_token: str) -> MCPHttpServer:
+        return MCPHttpServer(
+            url=NOTION_OFFICIAL_MCP_URL,
+            headers={"Authorization": f"Bearer {official_token}"},
+            timeout=120,
+        )
+
     async def _duplicate_and_move(
         self,
         official_token: str,
@@ -188,36 +196,68 @@ class NotionMCPStateManager(BaseStateManager):
         page_title: str,
         notion: Client,
     ) -> str:
-        """Duplicate a page via the official Notion MCP server, then move it."""
-        server = MCPHttpServer(
-            url=NOTION_OFFICIAL_MCP_URL,
-            headers={"Authorization": f"Bearer {official_token}"},
-            timeout=120,
-        )
-        async with server:
-            # 1. Duplicate
-            logger.info("| ○ Duplicating page via official MCP server …")
-            result = await server.call_tool(
-                "notion-duplicate-page", {"page_id": source_page_id}
+        """Duplicate a page via the official Notion MCP server, then move it.
+
+        Each retry opens a fresh MCP session so that a dead TLS connection
+        does not doom all subsequent attempts.
+        """
+        # 1. Duplicate — retry with exponential backoff + jitter
+        dup_max_attempts = 5
+        duplicated_id: Optional[str] = None
+        last_exc: Optional[BaseException] = None
+
+        for attempt in range(1, dup_max_attempts + 1):
+            server = self._new_mcp_server(official_token)
+            try:
+                async with server:
+                    logger.info(
+                        "| ○ Duplicating page via official MCP (attempt %d/%d) …",
+                        attempt, dup_max_attempts,
+                    )
+                    result = await server.call_tool(
+                        "notion-duplicate-page", {"page_id": source_page_id}
+                    )
+                    dup_data = json.loads(result["content"][0]["text"])
+                    if dup_data.get("name") == "APIResponseError":
+                        body = json.loads(dup_data.get("body", "{}"))
+                        raise RuntimeError(
+                            f"Duplication failed: {body.get('message')}"
+                        )
+                    duplicated_id = dup_data["page_id"]
+                    logger.info("| ✓ Duplicated page: %s", duplicated_id)
+                    last_exc = None
+                    break
+            except Exception as e:
+                last_exc = e
+                if attempt < dup_max_attempts:
+                    wait = min(2 ** attempt, 60) + random.uniform(0, 2)
+                    logger.warning(
+                        "| ✗ Duplicate attempt %d/%d failed (%s: %s). "
+                        "Retrying in %.1fs …",
+                        attempt, dup_max_attempts,
+                        type(e).__name__, str(e)[:200], wait,
+                    )
+                    await asyncio.sleep(wait)
+
+        if duplicated_id is None:
+            raise RuntimeError(
+                f"Page duplication failed after {dup_max_attempts} attempts: "
+                f"{last_exc}"
             )
-            dup_data = json.loads(result["content"][0]["text"])
-            if dup_data.get("name") == "APIResponseError":
-                body = json.loads(dup_data.get("body", "{}"))
-                raise RuntimeError(f"Duplication failed: {body.get('message')}")
-            duplicated_id = dup_data["page_id"]
-            logger.info("| ✓ Duplicated page: %s", duplicated_id)
 
-            # 2. Wait for page to be API-accessible before moving
-            if not self._wait_for_page_ready(notion, duplicated_id):
-                raise RuntimeError(
-                    f"Duplicated page {duplicated_id} not ready after timeout"
-                )
+        # 2. Wait for page to be API-accessible before moving
+        if not self._wait_for_page_ready(notion, duplicated_id):
+            raise RuntimeError(
+                f"Duplicated page {duplicated_id} not ready after timeout"
+            )
 
-            # 3. Move with retry + exponential backoff
-            logger.info("| ○ Moving page to eval hub …")
-            max_attempts = 12
-            for attempt in range(1, max_attempts + 1):
-                try:
+        # 3. Move — retry with fresh session per attempt
+        logger.info("| ○ Moving page to eval hub …")
+        max_move_attempts = 12
+        for attempt in range(1, max_move_attempts + 1):
+            server = self._new_mcp_server(official_token)
+            try:
+                async with server:
                     move_result = await server.call_tool(
                         "notion-move-pages",
                         {
@@ -230,33 +270,39 @@ class NotionMCPStateManager(BaseStateManager):
                     if move_data.get("name") == "APIResponseError":
                         body = json.loads(move_data.get("body", "{}"))
                         msg = body.get("message", "")
-                        if "not a page or database" in msg.lower() or body.get("code") == "validation_error":
-                            if attempt < max_attempts:
+                        if (
+                            "not a page or database" in msg.lower()
+                            or body.get("code") == "validation_error"
+                        ):
+                            if attempt < max_move_attempts:
                                 wait = min(2 ** attempt, 120)
                                 logger.info(
-                                    "| ○ Page not ready for move (attempt %d/%d). Waiting %ds …",
-                                    attempt, max_attempts, wait,
+                                    "| ○ Page not ready for move (attempt %d/%d). "
+                                    "Waiting %ds …",
+                                    attempt, max_move_attempts, wait,
                                 )
                                 await asyncio.sleep(wait)
                                 continue
                         raise RuntimeError(f"Move failed: {msg}")
 
-                    if "result" in move_data and move_data["result"].startswith("Success"):
+                    if "result" in move_data and move_data["result"].startswith(
+                        "Success"
+                    ):
                         logger.info("| ✓ Page moved to eval hub")
                         break
-                except RuntimeError:
+            except RuntimeError:
+                raise
+            except Exception as e:
+                if attempt >= max_move_attempts:
                     raise
-                except Exception as e:
-                    if attempt >= max_attempts:
-                        raise
-                    wait = min(attempt * 3, 60)
-                    logger.info(
-                        "| ○ Move failed (attempt %d/%d): %s. Waiting %ds …",
-                        attempt, max_attempts, e, wait,
-                    )
-                    await asyncio.sleep(wait)
-            else:
-                raise RuntimeError(f"Move failed after {max_attempts} attempts")
+                wait = min(attempt * 3, 60) + random.uniform(0, 2)
+                logger.info(
+                    "| ○ Move failed (attempt %d/%d): %s. Waiting %.1fs …",
+                    attempt, max_move_attempts, e, wait,
+                )
+                await asyncio.sleep(wait)
+        else:
+            raise RuntimeError(f"Move failed after {max_move_attempts} attempts")
 
         # 4. Rename (strip the "(1)" suffix)
         logger.info("| ○ Renaming duplicated page to '%s' …", page_title)
