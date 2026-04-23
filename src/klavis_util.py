@@ -82,20 +82,19 @@ class KlavisSandbox:
     def get_notion_auth(self) -> Optional[Dict]:
         """Extract Notion-specific auth credentials from sandbox details.
 
-        Returns a dict with integration keys, hub page URLs, and the OAuth
-        access token for the official Notion MCP server, or None on failure.
+        Returns a dict with integration keys and hub page URLs, or None on
+        failure. Page init uses the integration key to POST /v1/pages with
+        a template_id — no OAuth access token is needed for duplication.
         """
         details = self.get_sandbox_info()
         if not details:
             return None
         metadata = details.get("metadata") or {}
-        mcp_auth = metadata.get("mcp_auth_data") or {}
         return {
             "integration_key": metadata.get("mcpmark_notion_integration_key"),
             "integration_key_eval": metadata.get("mcpmark_notion_integration_key_eval"),
             "source_page_url": metadata.get("mcpmark_source_notion_page_url"),
             "eval_page_url": metadata.get("mcpmark_eval_notion_page_url"),
-            "official_mcp_token": (mcp_auth.get("token") or {}).get("access_token"),
         }
 
 

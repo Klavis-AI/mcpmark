@@ -2,36 +2,37 @@
 Notion MCP State Manager for MCPMark
 =====================================
 
-Replaces Playwright-based page duplication with the official Notion MCP server
-(https://mcp.notion.com/mcp).  All credentials are sourced from the Klavis
-sandbox metadata instead of local environment variables.
+Creates the per-task page under eval_hub via a single Notion REST call
+(POST /v1/pages with template.template_id), authenticated with the sandbox's
+integration key. Replaces the previous duplicate-and-move flow that went
+through the official Notion MCP and needed an OAuth access_token plus a
+separate move step with up to ~12 retries.
 """
 
-import asyncio
-import json
 import os
-import random
 import re
 import time
 from typing import Any, Dict, Optional, Set
 
+import httpx
 from notion_client import Client
 
 from src.base.state_manager import BaseStateManager, InitialStateInfo
 from src.base.task_manager import BaseTask
-from src.agents.mcp.http_server import MCPHttpServer
 from src.logger import get_logger
 from src.mcp_services.notion.notion_task_manager import NotionTask
 
 logger = get_logger(__name__)
 
-NOTION_OFFICIAL_MCP_URL = "https://mcp.notion.com/mcp"
+NOTION_API_BASE = "https://api.notion.com/v1"
+NOTION_VERSION = "2026-03-11"
 ORPHAN_PAGE_PATTERN = re.compile(r".+\s+\(\d+\)$")
 
 
 class NotionMCPStateManager(BaseStateManager):
-    """Manages Notion task state using the official Notion MCP server for
-    page duplication and the Notion API for verification/cleanup.
+    """Manages Notion task state. Creates the per-task page under eval_hub via
+    POST /v1/pages with template.template_id (single Notion REST call) and uses
+    the Notion API for verification/cleanup.
     """
 
     def __init__(self):
@@ -73,7 +74,6 @@ class NotionMCPStateManager(BaseStateManager):
         eval_key = self._notion_auth["integration_key_eval"]
         source_page_url = self._notion_auth["source_page_url"]
         eval_page_url = self._notion_auth["eval_page_url"]
-        official_token = self._notion_auth["official_mcp_token"]
 
         notion = Client(auth=integration_key)
         eval_notion = Client(auth=eval_key)
@@ -95,29 +95,50 @@ class NotionMCPStateManager(BaseStateManager):
                 )
                 return None
 
-            duplicated_id = asyncio.run(
-                self._duplicate_and_move(
-                    official_token, child_page_id, eval_hub_id, title, notion
+            # Create a new page under eval_hub from the template — single Notion
+            # REST call. Retry up to 5 times on transient 5xx / rate-limit errors.
+            max_attempts = 5
+            new_page_id: Optional[str] = None
+            last_exc: Optional[BaseException] = None
+            for attempt in range(1, max_attempts + 1):
+                try:
+                    new_page_id = self._create_page_from_template(
+                        integration_key, child_page_id, eval_hub_id
+                    )
+                    break
+                except Exception as e:
+                    last_exc = e
+                    if attempt < max_attempts:
+                        wait = min(2 ** attempt, 60)
+                        logger.warning(
+                            "| ✗ Create-from-template attempt %d/%d failed "
+                            "(%s: %s). Retrying in %ds …",
+                            attempt, max_attempts,
+                            type(e).__name__, str(e)[:200], wait,
+                        )
+                        time.sleep(wait)
+            if new_page_id is None:
+                raise RuntimeError(
+                    f"Create-from-template failed after {max_attempts} attempts: "
+                    f"{last_exc}"
                 )
-            )
 
-            # Wait for the page to be accessible via the eval integration
-            if not self._wait_for_page_ready(eval_notion, duplicated_id):
+            # Notion applies the template asynchronously after the response
+            # returns — poll until the page is API-accessible.
+            if not self._wait_for_page_ready(eval_notion, new_page_id):
                 logger.error(
-                    "| ✗ Duplicated page %s not accessible after move", duplicated_id
+                    "| ✗ New page %s not accessible after create", new_page_id
                 )
                 try:
-                    eval_notion.pages.update(page_id=duplicated_id, archived=True)
+                    eval_notion.pages.update(page_id=new_page_id, archived=True)
                 except Exception:
                     pass
                 return None
 
-            time.sleep(5)
-
-            duplicated_url = f"https://www.notion.so/{duplicated_id.replace('-', '')}"
+            new_page_url = f"https://www.notion.so/{new_page_id.replace('-', '')}"
             return InitialStateInfo(
-                state_id=duplicated_id,
-                state_url=duplicated_url,
+                state_id=new_page_id,
+                state_url=new_page_url,
                 metadata={
                     "category": task.category_id,
                     "task_name": task.name,
@@ -178,139 +199,51 @@ class NotionMCPStateManager(BaseStateManager):
         return False
 
     # ------------------------------------------------------------------
-    # MCP duplication logic
+    # Create page from template (Notion REST)
     # ------------------------------------------------------------------
 
-    def _new_mcp_server(self, official_token: str) -> MCPHttpServer:
-        return MCPHttpServer(
-            url=NOTION_OFFICIAL_MCP_URL,
-            headers={"Authorization": f"Bearer {official_token}"},
-            timeout=120,
-        )
-
-    async def _duplicate_and_move(
-        self,
-        official_token: str,
-        source_page_id: str,
-        eval_hub_id: str,
-        page_title: str,
-        notion: Client,
+    @staticmethod
+    def _create_page_from_template(
+        integration_key: str, template_id: str, eval_hub_id: str
     ) -> str:
-        """Duplicate a page via the official Notion MCP server, then move it.
+        """Create a new page under eval_hub_id using template_id as the template.
 
-        Each retry opens a fresh MCP session so that a dead TLS connection
-        does not doom all subsequent attempts.
+        Single POST /v1/pages authenticated with the sandbox's integration key.
+        Notion applies the template asynchronously after the response returns,
+        so the caller must still poll `_wait_for_page_ready` on the returned id.
         """
-        # 1. Duplicate — retry with exponential backoff + jitter
-        dup_max_attempts = 5
-        duplicated_id: Optional[str] = None
-        last_exc: Optional[BaseException] = None
-
-        for attempt in range(1, dup_max_attempts + 1):
-            server = self._new_mcp_server(official_token)
-            try:
-                async with server:
-                    logger.info(
-                        "| ○ Duplicating page via official MCP (attempt %d/%d) …",
-                        attempt, dup_max_attempts,
-                    )
-                    result = await server.call_tool(
-                        "notion-duplicate-page", {"page_id": source_page_id}
-                    )
-                    dup_data = json.loads(result["content"][0]["text"])
-                    if dup_data.get("name") == "APIResponseError":
-                        body = json.loads(dup_data.get("body", "{}"))
-                        raise RuntimeError(
-                            f"Duplication failed: {body.get('message')}"
-                        )
-                    duplicated_id = dup_data["page_id"]
-                    logger.info("| ✓ Duplicated page: %s", duplicated_id)
-                    last_exc = None
-                    break
-            except Exception as e:
-                last_exc = e
-                if attempt < dup_max_attempts:
-                    wait = min(2 ** attempt, 60) + random.uniform(0, 2)
-                    logger.warning(
-                        "| ✗ Duplicate attempt %d/%d failed (%s: %s). "
-                        "Retrying in %.1fs …",
-                        attempt, dup_max_attempts,
-                        type(e).__name__, str(e)[:200], wait,
-                    )
-                    await asyncio.sleep(wait)
-
-        if duplicated_id is None:
-            raise RuntimeError(
-                f"Page duplication failed after {dup_max_attempts} attempts: "
-                f"{last_exc}"
-            )
-
-        # 2. Wait for page to be API-accessible before moving
-        if not self._wait_for_page_ready(notion, duplicated_id):
-            raise RuntimeError(
-                f"Duplicated page {duplicated_id} not ready after timeout"
-            )
-
-        # 3. Move — retry with fresh session per attempt
-        logger.info("| ○ Moving page to eval hub …")
-        max_move_attempts = 12
-        for attempt in range(1, max_move_attempts + 1):
-            server = self._new_mcp_server(official_token)
-            try:
-                async with server:
-                    move_result = await server.call_tool(
-                        "notion-move-pages",
-                        {
-                            "page_or_database_ids": [duplicated_id],
-                            "new_parent": {"page_id": eval_hub_id},
-                        },
-                    )
-                    move_data = json.loads(move_result["content"][0]["text"])
-
-                    if move_data.get("name") == "APIResponseError":
-                        body = json.loads(move_data.get("body", "{}"))
-                        msg = body.get("message", "")
-                        if (
-                            "not a page or database" in msg.lower()
-                            or body.get("code") == "validation_error"
-                        ):
-                            if attempt < max_move_attempts:
-                                wait = min(2 ** attempt, 120)
-                                logger.info(
-                                    "| ○ Page not ready for move (attempt %d/%d). "
-                                    "Waiting %ds …",
-                                    attempt, max_move_attempts, wait,
-                                )
-                                await asyncio.sleep(wait)
-                                continue
-                        raise RuntimeError(f"Move failed: {msg}")
-
-                    if "result" in move_data and move_data["result"].startswith(
-                        "Success"
-                    ):
-                        logger.info("| ✓ Page moved to eval hub")
-                        break
-            except RuntimeError:
-                raise
-            except Exception as e:
-                if attempt >= max_move_attempts:
-                    raise
-                wait = min(attempt * 3, 60) + random.uniform(0, 2)
-                logger.info(
-                    "| ○ Move failed (attempt %d/%d): %s. Waiting %.1fs …",
-                    attempt, max_move_attempts, e, wait,
-                )
-                await asyncio.sleep(wait)
-        else:
-            raise RuntimeError(f"Move failed after {max_move_attempts} attempts")
-
-        # 4. Rename (strip the "(1)" suffix)
-        logger.info("| ○ Renaming duplicated page to '%s' …", page_title)
-        notion.pages.update(
-            page_id=duplicated_id,
-            properties={"title": {"title": [{"text": {"content": page_title}}]}},
+        headers = {
+            "Authorization": f"Bearer {integration_key}",
+            "Notion-Version": NOTION_VERSION,
+            "Content-Type": "application/json",
+        }
+        body = {
+            "parent": {"type": "page_id", "page_id": eval_hub_id},
+            "template": {"type": "template_id", "template_id": template_id},
+        }
+        t0 = time.time()
+        logger.info(
+            "| ○ Creating page from template %s → parent=%s …",
+            template_id, eval_hub_id,
         )
-        return duplicated_id
+        resp = httpx.post(
+            f"{NOTION_API_BASE}/pages",
+            headers=headers,
+            json=body,
+            timeout=60,
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(
+                f"POST /pages HTTP {resp.status_code}: {resp.text[:300]}"
+            )
+        data = resp.json()
+        new_page_id = data.get("id")
+        if not new_page_id:
+            raise RuntimeError(f"POST /pages returned no id: body={resp.text[:300]}")
+        logger.info(
+            "| ✓ Created page %s (time=%.2fs)", new_page_id, time.time() - t0
+        )
+        return new_page_id
 
     # ------------------------------------------------------------------
     # Notion API helpers
