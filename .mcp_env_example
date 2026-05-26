@@ -4,3 +4,7 @@ OPENAI_API_KEY="OPENAI_API_KEY"
 
 # Klavis API key
 KLAVIS_API_KEY="KLAVIS_API_KEY"
+
+# Set to "true" to route Notion runs through the mock server
+# (klavis-api /sandbox/mock_notion, backed by mock-servers/notion-mcpmark).
+# NOTION_MOCK=false

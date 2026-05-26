@@ -91,6 +91,11 @@ class ModelConfig:
             "api_key_var": "DEEPSEEK_API_KEY",
             "litellm_input_model_name": "deepseek/deepseek-reasoner",
         },
+        "deepseek-v4-pro": {
+            "provider": "deepseek",
+            "api_key_var": "OPENROUTER_API_KEY",
+            "litellm_input_model_name": "openrouter/deepseek/deepseek-v4-pro",
+        },
         # Anthropic models
         "claude-3.7-sonnet": {
             "provider": "anthropic",
@@ -138,6 +143,11 @@ class ModelConfig:
             "api_key_var": "GEMINI_API_KEY",
             "litellm_input_model_name": "gemini/gemini-3-pro-preview",
         },
+        "gemini-3.5-flash": {
+            "provider": "google",
+            "api_key_var": "OPENROUTER_API_KEY",
+            "litellm_input_model_name": "openrouter/google/gemini-3.5-flash",
+        },
         # Moonshot models
         "kimi-k2-0711": {
             "provider": "moonshot",
@@ -175,6 +185,11 @@ class ModelConfig:
             "provider": "qwen",
             "api_key_var": "DASHSCOPE_API_KEY",
             "litellm_input_model_name": "dashscope/qwen3-max-preview",
+        },
+        "qwen-3.7-max": {
+            "provider": "qwen",
+            "api_key_var": "OPENROUTER_API_KEY",
+            "litellm_input_model_name": "openrouter/qwen/qwen3.7-max",
         },
         # Zhipu
         "glm-4.5": {

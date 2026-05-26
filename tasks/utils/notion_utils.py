@@ -14,6 +14,11 @@ def get_notion_client():
             file=sys.stderr,
         )
         sys.exit(1)
+    # In NOTION_MOCK mode the state manager sets EVAL_NOTION_BASE_URL to the
+    # mock-server host so notion-client routes /v1/* to the mock REST facade.
+    base_url = os.getenv("EVAL_NOTION_BASE_URL")
+    if base_url:
+        return Client(auth=api_key, base_url=base_url)
     return Client(auth=api_key)
 
 

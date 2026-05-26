@@ -48,12 +48,20 @@ class NotionMCPStateManager(BaseStateManager):
         self._notion_auth = notion_auth
 
     def get_service_config_for_agent(self) -> dict:
+        if self._notion_auth and self._notion_auth.get("mock_mode"):
+            return {"notion_key": self._notion_auth.get("instance_id") or ""}
         if self._notion_auth and self._notion_auth.get("integration_key_eval"):
             return {"notion_key": self._notion_auth["integration_key_eval"]}
         return {}
 
     def set_verification_environment(self, messages_path: str = None) -> None:
         super().set_verification_environment(messages_path)
+        if self._notion_auth and self._notion_auth.get("mock_mode"):
+            os.environ["EVAL_NOTION_API_KEY"] = self._notion_auth.get("instance_id") or ""
+            os.environ["EVAL_NOTION_BASE_URL"] = self._notion_auth.get("rest_base_url") or ""
+            return
+        # Real mode: clear any leftover mock base_url from a prior run.
+        os.environ.pop("EVAL_NOTION_BASE_URL", None)
         if self._notion_auth and self._notion_auth.get("integration_key_eval"):
             os.environ["EVAL_NOTION_API_KEY"] = self._notion_auth["integration_key_eval"]
 
@@ -69,6 +77,24 @@ class NotionMCPStateManager(BaseStateManager):
         if not self._notion_auth:
             logger.error("No sandbox auth set – call set_sandbox_auth() first")
             return None
+
+        # Mock mode: klavis-api already cloned the template at acquire time. The
+        # task_page_id returned in sandbox metadata is the duplicated root
+        # page — no extra REST round trip needed.
+        if self._notion_auth.get("mock_mode"):
+            page_id = self._notion_auth.get("task_page_id")
+            if not page_id:
+                logger.error("| ✗ Mock acquire returned no task_page_id")
+                return None
+            logger.info("| ✓ Using mock task page %s", page_id)
+            return InitialStateInfo(
+                state_id=page_id,
+                metadata={
+                    "category": task.category_id,
+                    "task_name": task.name,
+                    "mock_mode": True,
+                },
+            )
 
         integration_key = self._notion_auth["integration_key"]
         eval_key = self._notion_auth["integration_key_eval"]
@@ -159,6 +185,9 @@ class NotionMCPStateManager(BaseStateManager):
     def _cleanup_task_initial_state(self, task: BaseTask) -> bool:
         if not isinstance(task, NotionTask):
             return True
+        # Mock mode: sandbox release triggers klavis-api, so nothing to archive per-page.
+        if self._notion_auth and self._notion_auth.get("mock_mode"):
+            return True
         page_id = task.duplicated_initial_state_id
         if not page_id:
             logger.warning("| ✗ No duplicated page ID for task %s", task.name)
@@ -180,6 +209,8 @@ class NotionMCPStateManager(BaseStateManager):
             return False
 
     def _cleanup_single_resource(self, resource: Dict[str, Any]) -> bool:
+        if self._notion_auth and self._notion_auth.get("mock_mode"):
+            return True
         if resource["type"] == "page":
             try:
                 eval_key = (self._notion_auth or {}).get("integration_key_eval")
