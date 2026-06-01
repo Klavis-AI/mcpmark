@@ -78,9 +78,7 @@ class NotionMCPStateManager(BaseStateManager):
             logger.error("No sandbox auth set – call set_sandbox_auth() first")
             return None
 
-        # Mock mode: klavis-api already cloned the template at acquire time. The
-        # task_page_id returned in sandbox metadata is the duplicated root
-        # page — no extra REST round trip needed.
+        # Klavis Notion Mock Mode
         if self._notion_auth.get("mock_mode"):
             page_id = self._notion_auth.get("task_page_id")
             if not page_id:
@@ -185,7 +183,7 @@ class NotionMCPStateManager(BaseStateManager):
     def _cleanup_task_initial_state(self, task: BaseTask) -> bool:
         if not isinstance(task, NotionTask):
             return True
-        # Mock mode: sandbox release triggers klavis-api, so nothing to archive per-page.
+        # Klavis Notion Mock Mode: no need to cleanup
         if self._notion_auth and self._notion_auth.get("mock_mode"):
             return True
         page_id = task.duplicated_initial_state_id

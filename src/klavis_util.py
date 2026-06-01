@@ -30,19 +30,19 @@ class KlavisSandbox:
     def acquire(
         self,
         server_name: str,
-        task_id: Optional[str] = None,
+        tag: Optional[str] = None,
         extra_params: Optional[Dict] = None,
     ) -> Optional[Dict]:
         """Acquire an individual sandbox for a non-local-sandbox server.
 
-        When NOTION_MOCK=true and server_name == "notion" or "mock_notion", routes to the
-        mock_notion pool. task_id is required in that case and is forwarded to the mock template-clone step.
+        When NOTION_MOCK=true and server_name == "mock_notion" (or "notion" for backward compatibility), routes to the
+        mock_notion pool. `tag` (the category slug, e.g. 'online_resume').
         """
         mock_notion = _notion_mock_enabled() and (server_name == "notion" or server_name == "mock_notion")
         effective_server = "mock_notion" if mock_notion else server_name
 
-        if mock_notion and not task_id:
-            logger.error("NOTION_MOCK=true requires a task_id (category slug)")
+        if mock_notion and not tag:
+            logger.error("NOTION_MOCK=true requires a tag (category slug)")
             return None
 
         url = f"{KLAVIS_API_BASE}/sandbox/{effective_server}"
@@ -52,7 +52,8 @@ class KlavisSandbox:
         }
         body = {"benchmark": "MCP_Mark", "ttl_seconds": 7200}
         if mock_notion:
-            body["task_id"] = task_id
+            # Template selector is carried by `tag`
+            body["tag"] = tag
         if extra_params:
             body.update(extra_params)
         try:
@@ -118,11 +119,8 @@ class KlavisSandbox:
         Real mode: returns integration keys and hub page URLs from sandbox
         metadata. Page init uses the integration key to POST /v1/pages with
         a template_id — no OAuth access token is needed for duplication.
-
-        Mock mode (NOTION_MOCK=true): klavis-api already cloned the template
-        on acquire; returns {mock_mode, instance_id, task_page_id, mcp_url,
-        rest_base_url} for the state manager and verify scripts.
         """
+        # Klavis Notion Mock Mode
         if self.acquired_sandbox and self.acquired_sandbox.get("_mcpmark_mock"):
             sandbox = self.acquired_sandbox
             metadata = sandbox.get("metadata") or {}
