@@ -3,6 +3,8 @@ import os
 import tarfile
 from pathlib import Path
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
+
 import httpx
 
 from src.logger import get_logger
@@ -13,6 +15,10 @@ logger = get_logger(__name__)
 KLAVIS_API_BASE = "https://api.klavis.ai"
 
 
+def _notion_mock_enabled() -> bool:
+    return os.environ.get("NOTION_MOCK", "").strip().lower() in ("1", "true", "yes")
+
+
 class KlavisSandbox:
     """Klavis MCP Sandbox API client for individual (non-local) sandboxes."""
     def __init__(self, api_key: str = None):
@@ -21,25 +27,53 @@ class KlavisSandbox:
             raise ValueError("KLAVIS_API_KEY is required")
         self.acquired_sandbox = None
 
-    def acquire(self, server_name: str, extra_params: Optional[Dict] = None) -> Optional[Dict]:
-        """Acquire an individual sandbox for a non-local-sandbox server."""
-        url = f"{KLAVIS_API_BASE}/sandbox/{server_name}"
+    def acquire(
+        self,
+        server_name: str,
+        tag: Optional[str] = None,
+        extra_params: Optional[Dict] = None,
+    ) -> Optional[Dict]:
+        """Acquire an individual sandbox for a non-local-sandbox server.
+
+        When NOTION_MOCK=true and server_name == "mock_notion" (or "notion" for backward compatibility), routes to the
+        mock_notion pool. `tag` (the category slug, e.g. 'online_resume').
+        """
+        mock_notion = _notion_mock_enabled() and (server_name == "notion" or server_name == "mock_notion")
+        effective_server = "mock_notion" if mock_notion else server_name
+
+        if mock_notion and not tag:
+            logger.error("NOTION_MOCK=true requires a tag (category slug)")
+            return None
+
+        url = f"{KLAVIS_API_BASE}/sandbox/{effective_server}"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
         body = {"benchmark": "MCP_Mark", "ttl_seconds": 7200}
+        if mock_notion:
+            # Template selector is carried by `tag`
+            body["tag"] = tag
         if extra_params:
             body.update(extra_params)
         try:
             resp = httpx.post(url, json=body, headers=headers, timeout=60)
             resp.raise_for_status()
             data = resp.json()
+            if mock_notion:
+                # Normalize so downstream lookups by task.service ("notion")
+                # still find the URL, and mark the dict as mock-mode for
+                # get_notion_auth().
+                urls = dict(data.get("server_urls") or {})
+                if "mock_notion" in urls and "notion" not in urls:
+                    urls["notion"] = urls["mock_notion"]
+                data["server_urls"] = urls
+                data["_mcpmark_mock"] = True
             self.acquired_sandbox = data
             logger.info(f"Acquired sandbox: {data}")
             return data
         except Exception as e:
-            logger.error(f"Failed to acquire sandbox for '{server_name}': {e}")
+            logger.error(f"Failed to acquire sandbox for '{effective_server}': {e}")
             return None
 
     def get_sandbox_info(self) -> Optional[Dict]:
@@ -82,10 +116,29 @@ class KlavisSandbox:
     def get_notion_auth(self) -> Optional[Dict]:
         """Extract Notion-specific auth credentials from sandbox details.
 
-        Returns a dict with integration keys and hub page URLs, or None on
-        failure. Page init uses the integration key to POST /v1/pages with
+        Real mode: returns integration keys and hub page URLs from sandbox
+        metadata. Page init uses the integration key to POST /v1/pages with
         a template_id — no OAuth access token is needed for duplication.
         """
+        # Klavis Notion Mock Mode
+        if self.acquired_sandbox and self.acquired_sandbox.get("_mcpmark_mock"):
+            sandbox = self.acquired_sandbox
+            metadata = sandbox.get("metadata") or {}
+            mcp_url = (sandbox.get("server_urls") or {}).get("notion") or (
+                sandbox.get("server_urls") or {}
+            ).get("mock_notion")
+            rest_base_url = ""
+            if mcp_url:
+                parsed = urlparse(mcp_url)
+                rest_base_url = f"{parsed.scheme}://{parsed.netloc}"
+            return {
+                "mock_mode": True,
+                "instance_id": sandbox.get("sandbox_id"),
+                "task_page_id": metadata.get("task_page_id"),
+                "mcp_url": mcp_url,
+                "rest_base_url": rest_base_url,
+            }
+
         details = self.get_sandbox_info()
         if not details:
             return None

@@ -386,7 +386,10 @@ class MCPEvaluator:
             else:
                 sandbox = KlavisSandbox()
                 try:
-                    sandbox.acquire(task.service)
+                    sandbox.acquire(
+                        task.service,
+                        tag=getattr(task, "category_id", None),
+                    )
                     task_result = self._run_single_task(task, sandbox)
                 finally:
                     sandbox.release()
